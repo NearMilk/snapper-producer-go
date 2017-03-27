@@ -1,0 +1,10 @@
+sudo: false
+language: go
+go:
+  - 1.8
+before_install:
+  - go get -t -v ./...
+  - go get github.com/mattn/goveralls
+script:
+  - go test -coverprofile=snapperproducer.coverprofile
+  - goveralls -coverprofile=snapperproducer.coverprofile -service=travis-ci

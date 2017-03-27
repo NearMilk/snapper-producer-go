@@ -3,18 +3,13 @@ package snapper
 import (
 	"errors"
 	"net"
-	"sync/atomic"
-
-	"time"
-
 	"strconv"
-
-	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/teambition/jsonrpc-go"
 )
 
-const maxUint = uint64(^uint(0) - 1000000)
 const retryDelay = 500 * time.Millisecond
 
 // Connector for connect the remote server
@@ -30,9 +25,7 @@ type connector struct {
 	onSign            getSignature
 	onReconnect       reconnecting
 	onError           erroring
-
-	connected     bool
-	connectedlock *sync.RWMutex
+	connected         int32
 }
 
 type getSignature func() string
@@ -47,7 +40,6 @@ func newConnector(address string, rpctimeouts ...time.Duration) (conn *connector
 		notificationQueue: NewQueue(),
 		rpcs:              newrpcmap(),
 		closed:            make(chan bool),
-		connectedlock:     &sync.RWMutex{},
 	}
 	if len(rpctimeouts) > 0 && rpctimeouts[0] > time.Second {
 		conn.rpctimeout = rpctimeouts[0]
@@ -168,7 +160,6 @@ func (conn *connector) reconnect() {
 		case <-conn.closed:
 			return
 		default:
-			time.Sleep(retryDelay)
 			var err error
 			conn.socket, err = conn.createConn()
 			if conn.onReconnect != nil {
@@ -178,6 +169,7 @@ func (conn *connector) reconnect() {
 				conn.setConnected(true)
 				return
 			}
+			time.Sleep(retryDelay)
 		}
 	}
 }
@@ -226,9 +218,6 @@ func (conn *connector) validateAuth(reply string) error {
 func (conn *connector) randID() string {
 	ISN := strconv.FormatInt(time.Now().UnixNano(), 36)
 	id := atomic.AddUint64(&conn.id, 1)
-	if id > maxUint {
-		atomic.StoreUint64(&conn.id, 1)
-	}
 	return ISN + ":" + strconv.FormatUint(id, 36)
 }
 
@@ -239,12 +228,14 @@ func (conn *connector) sendError(err error) {
 }
 
 func (conn *connector) setConnected(b bool) {
-	conn.connectedlock.Lock()
-	defer conn.connectedlock.Unlock()
-	conn.connected = b
+	var connected int32
+	if b {
+		connected = 1
+	} else {
+		connected = 0
+	}
+	atomic.StoreInt32(&conn.connected, connected)
 }
 func (conn *connector) isConnected() bool {
-	conn.connectedlock.RLock()
-	defer conn.connectedlock.RUnlock()
-	return conn.connected
+	return atomic.LoadInt32(&conn.connected) == 1
 }

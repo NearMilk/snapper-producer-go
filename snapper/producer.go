@@ -9,14 +9,6 @@ import (
 	"github.com/teambition/jsonrpc-go"
 )
 
-var rpctimeout = time.Second * 40
-
-// MsgCallBack ...
-type MsgCallBack func(error)
-
-// RequestCallBack ...
-type RequestCallBack func(interface{}, error)
-
 // Producer form send request and message to remote server
 type Producer struct {
 	queue       [][]string

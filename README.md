@@ -7,27 +7,36 @@ Snapper producer client for golang
 
 ## Example
 ```go
-	options = &snapper.Options{
-		SecretKeys: []string{"tokenXXXXXXX"},
-		ExpiresIn:  7800,
-		Address:    "127.0.0.1:7720", 
-		ProducerID: "testProducerId",
-	}
-    producer, _ := snapper.New(options)
+options = &snapper.Options{
+    SecretKeys: []string{"tokenXXXXXXX"},
+    ExpiresIn:  7800,
+    Address:    "127.0.0.1:7720", 
+    ProducerID: "testProducerId",
+}
+producer, _ := snapper.New(options)
+producer.OnReconnect = func(err error) {
+  log.Println("onReconnect:", err)
+}
+producer.OnError = func(err error) {
+  log.Println("onError:", err)
+}
+err := producer.Connect()
 
-    // generate a token for a consumer
-    var token = producer.SignAuth("userIdxxx")
+// generate a token for a consumer
+var token = producer.SignAuth("userIdxxx")
 
-    // send a message to a room
-    producer.SendMessage("room","message")
-    producer.SendMessage("project58b7ad3b5b2387b92fc68faf","message")
-    producer.sendMessage("projects51762b8f78cfa9f357000011", "{"e":":remove:tasks","d":"553f569aca14974c"}")
+// send a message to a room
+producer.SendMessage("room","message")
+producer.SendMessage("project58b7ad3b5b2387b92fc68faf","message")
+producer.sendMessage("projects51762b8f78cfa9f357000011", "{"e":":remove:tasks","d":"553f569aca14974c"}")
 
-    producer.JoinRoom("projects51762b8f78cfa9f357000011', 'lkoH6jeg8ATcptZQFHHH7w~~")
-    producer.LeaveRoom("projects51762b8f78cfa9f357000011", "lkoH6jeg8ATcptZQFHHH7w~~")
+producer.JoinRoom("projects51762b8f78cfa9f357000011', 'lkoH6jeg8ATcptZQFHHH7w~~")
+producer.LeaveRoom("projects51762b8f78cfa9f357000011", "lkoH6jeg8ATcptZQFHHH7w~~")
 
-    producer.Request("method", "arguments")
-    producer.Request("consumers", string[]{"userIdxxx"})
+producer.Request("method", "arguments")
+producer.Request("consumers", string[]{"userIdxxx"})
+
+producer.Close()
 ```   
 
 ## API

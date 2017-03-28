@@ -166,9 +166,10 @@ func TestProducer(t *testing.T) {
 
 }
 func TestProducerReconnect(t *testing.T) {
-
 	assert := assert.New(t)
 	producer := New(options)
+	defer producer.Close()
+
 	producer.OnReconnect = func(err error) {
 		log.Println("TestProducerReconnect Try reconnect:", err)
 	}
@@ -190,8 +191,6 @@ func TestProducerReconnect(t *testing.T) {
 	if assert.Nil(err) {
 		assert.Equal(result, float64(1))
 	}
-	producer.Close()
-	time.Sleep(time.Second)
 }
 func TestProducerError(t *testing.T) {
 	assert := assert.New(t)

@@ -72,7 +72,6 @@ func (conn *connector) write() {
 				conn.sendError(err)
 				conn.socket.Close()
 				conn.reconnect()
-				go conn.read()
 			} else {
 				content = ""
 			}
@@ -81,31 +80,27 @@ func (conn *connector) write() {
 }
 func (conn *connector) read() {
 	for {
-		select {
-		case <-conn.closed:
+
+		result, err := conn.socket.ReadString()
+		if err != nil {
+			conn.sendError(err)
 			return
-		default:
-			result, err := conn.socket.ReadString()
-			if err != nil {
-				conn.sendError(err)
-				return
+		}
+		res, _ := jsonrpc.Parse(result)
+		if res.Type == jsonrpc.InvalidType {
+			conn.sendError(errors.New(res.Error.Message))
+			continue
+		}
+		id, _ := res.ID.(string)
+		rpc, ok := conn.rpcs.get(id)
+		if ok {
+			if res.Error != nil {
+				err = errors.New(res.Error.Message)
+				rpc.callback <- &resultItem{result: nil, err: err}
+			} else {
+				rpc.callback <- &resultItem{result: res.Result, err: nil}
 			}
-			res, _ := jsonrpc.Parse(result)
-			if res.Type == jsonrpc.InvalidType {
-				conn.sendError(errors.New(res.Error.Message))
-				continue
-			}
-			id, _ := res.ID.(string)
-			rpc, ok := conn.rpcs.get(id)
-			if ok {
-				if res.Error != nil {
-					err = errors.New(res.Error.Message)
-					rpc.callback <- &resultItem{result: nil, err: err}
-				} else {
-					rpc.callback <- &resultItem{result: res.Result, err: nil}
-				}
-				conn.rpcs.delete(id)
-			}
+			conn.rpcs.delete(id)
 		}
 	}
 }
@@ -156,6 +151,7 @@ func (conn *connector) close() {
 func (conn *connector) reconnect() {
 	conn.setConnected(false)
 	for {
+		time.Sleep(retryDelay)
 		select {
 		case <-conn.closed:
 			return
@@ -166,10 +162,10 @@ func (conn *connector) reconnect() {
 				go conn.onReconnect(err)
 			}
 			if err == nil {
+				go conn.read()
 				conn.setConnected(true)
 				return
 			}
-			time.Sleep(retryDelay)
 		}
 	}
 }

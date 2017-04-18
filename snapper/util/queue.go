@@ -1,4 +1,4 @@
-package snapper
+package util
 
 import "sync"
 

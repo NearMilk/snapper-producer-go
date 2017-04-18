@@ -37,18 +37,24 @@ var (
 )
 
 func TestProducer(t *testing.T) {
-	producer := New(options)
-	producer.OnReconnect = func(err error) {
-		log.Println("Try reconnect:", err)
-	}
-
-	producer.OnError = func(err error) {
-		log.Println("Occur error:", err)
-	}
-	connecterr := producer.Connect()
+	producer, connecterr := New(options)
 	if connecterr != nil {
 		panic(connecterr)
 	}
+	go func() {
+		event := <-producer.Event
+		switch event.EventType {
+		case ErrorEvent:
+			log.Println("Occur error:", event.EventData)
+			break
+		case CloseEvent:
+			log.Println("Closed")
+			break
+		case ReconnectEvent:
+			log.Println("Try reconnect:", event.EventData)
+			break
+		}
+	}()
 	defer producer.Close()
 
 	t.Run("Producer with SendMessage func that should be", func(t *testing.T) {
@@ -167,20 +173,25 @@ func TestProducer(t *testing.T) {
 }
 func TestProducerReconnect(t *testing.T) {
 	assert := assert.New(t)
-	producer := New(options)
-	defer producer.Close()
+	producer, connecterr := New(options)
+	if connecterr != nil {
+		panic(connecterr)
+	}
+	go func() {
+		for {
+			event := <-producer.Event
+			switch event.EventType {
+			case ErrorEvent:
+				log.Println("Occur error:", event.EventData)
+			case CloseEvent:
+				log.Println("Closed")
+				return
+			case ReconnectEvent:
+				log.Println("Try reconnect:", event.EventData)
+			}
+		}
+	}()
 
-	producer.OnReconnect = func(err error) {
-		log.Println("TestProducerReconnect Try reconnect:", err)
-	}
-
-	producer.OnError = func(err error) {
-		log.Println("TestProducerReconnect Occur error:", err)
-	}
-	err := producer.Connect()
-	if err != nil {
-		panic(err)
-	}
 	producer.conn.socket.Close()
 	result, err := producer.JoinRoom(userroom, "xxxxxxxxxxxxxxxc")
 	if assert.Nil(err) {
@@ -199,29 +210,26 @@ func TestProducerError(t *testing.T) {
 		ExpiresIn:  604800,
 		Address:    "127.0.0.1:7720",
 	}
-	producer := New(erropts)
-	err := producer.Connect()
+	producer, err := New(erropts)
 	assert.NotNil(err)
 
 	erropts = &Options{
 		Address: "192.168.0.21x7721",
 	}
 
-	producer = New(erropts)
-	err = producer.Connect()
+	producer, err = New(erropts)
 	assert.Contains(err.Error(), "missing port in address")
 
 	erropts = &Options{}
 
-	producer = New(erropts)
-	err = producer.Connect()
+	producer, err = New(erropts)
 	assert.Contains(err.Error(), "connectex: No connection could be made because the target machine actively refused it.")
 
 	erropts = &Options{
 		SecretKeys: []string{"toeknxx"},
 		Address:    options.Address,
 	}
-	producer = New(erropts)
-	err = producer.Connect()
+	producer, err = New(erropts)
 	assert.Contains(err.Error(), "Unauthorized")
+	assert.NotNil(producer)
 }

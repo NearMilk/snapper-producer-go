@@ -11,7 +11,7 @@ func TestConnector(t *testing.T) {
 
 		assert := assert.New(t)
 
-		conn := newConnector("127.0.0.1:7720")
+		conn := newConnector("127.0.0.1:7720", nil)
 
 		err := conn.validateAuth("xx")
 		assert.Contains(err.Error(), "Parse error")

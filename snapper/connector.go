@@ -8,38 +8,53 @@ import (
 	"time"
 
 	"github.com/teambition/jsonrpc-go"
+	"github.com/teambition/snapper-producer-go/snapper/service"
+	"github.com/teambition/snapper-producer-go/snapper/util"
 )
+
+var (
+	// ReconnectEvent ...
+	ReconnectEvent = "reconnect"
+	// ErrorEvent ...
+	ErrorEvent = "error"
+	// CloseEvent ...
+	CloseEvent = "close"
+)
+
+// Event ...
+type Event struct {
+	EventType string
+	EventData error
+}
+type parent interface {
+	getSignature() string
+	sendEvent(ev *Event)
+}
 
 const retryDelay = 500 * time.Millisecond
 
 // Connector for connect the remote server
 type connector struct {
 	addr              string
-	socket            *socket
-	notificationQueue *Queue
-	rpcs              *rpcmap
+	socket            *service.Socket
+	notificationQueue *util.Queue
+	rpcs              *util.RPCMap
 	closed            chan bool
 	rpctimeout        time.Duration
 	id                uint64
-	queue             chan string
-	onSign            getSignature
-	onReconnect       reconnecting
-	onError           erroring
+	queue             chan []byte
 	connected         int32
+	p                 parent
 }
 
-type getSignature func() string
-type reconnecting func(error)
-type erroring func(error)
-type closing func(error)
-
-func newConnector(address string, rpctimeouts ...time.Duration) (conn *connector) {
+func newConnector(address string, p parent, rpctimeouts ...time.Duration) (conn *connector) {
 	conn = &connector{
 		addr:              address,
-		queue:             make(chan string, 10000),
-		notificationQueue: NewQueue(),
-		rpcs:              newrpcmap(),
+		queue:             make(chan []byte, 10000),
+		notificationQueue: util.NewQueue(),
+		rpcs:              util.NewRPCMap(),
 		closed:            make(chan bool),
+		p:                 p,
 	}
 	if len(rpctimeouts) > 0 && rpctimeouts[0] > time.Second {
 		conn.rpctimeout = rpctimeouts[0]
@@ -58,49 +73,48 @@ func (conn *connector) start() (err error) {
 	return
 }
 func (conn *connector) write() {
-	var content string
+	var content []byte
 	for {
 		select {
 		case <-conn.closed:
 			return
 		default:
-			if content == "" {
+			if content == nil {
 				content = <-conn.queue
 			}
 			_, err := conn.socket.WriteBulkString(content)
 			if err != nil {
-				conn.sendError(err)
+				conn.p.sendEvent(&Event{EventType: ErrorEvent, EventData: err})
 				conn.socket.Close()
 				conn.reconnect()
 			} else {
-				content = ""
+				content = nil
 			}
 		}
 	}
 }
 func (conn *connector) read() {
 	for {
-
 		result, err := conn.socket.ReadString()
 		if err != nil {
-			conn.sendError(err)
+			conn.p.sendEvent(&Event{EventType: ErrorEvent, EventData: err})
 			return
 		}
-		res, _ := jsonrpc.Parse(result)
+		res, _ := jsonrpc.ParseString(result)
 		if res.Type == jsonrpc.InvalidType {
-			conn.sendError(errors.New(res.Error.Message))
+			conn.p.sendEvent(&Event{EventType: ErrorEvent, EventData: err})
 			continue
 		}
 		id, _ := res.ID.(string)
-		rpc, ok := conn.rpcs.get(id)
+		rpc, ok := conn.rpcs.Get(id)
 		if ok {
 			if res.Error != nil {
 				err = errors.New(res.Error.Message)
-				rpc.callback <- &resultItem{result: nil, err: err}
+				rpc.Result <- &util.ResultItem{Result: nil, Err: err}
 			} else {
-				rpc.callback <- &resultItem{result: res.Result, err: nil}
+				rpc.Result <- &util.ResultItem{Result: res.Result, Err: nil}
 			}
-			conn.rpcs.delete(id)
+			conn.rpcs.Delete(id)
 		}
 	}
 }
@@ -111,21 +125,21 @@ func (conn *connector) request(method string, args interface{}) (result interfac
 		return nil, errors.New("socket was closed")
 	}
 	requestid := conn.randID()
-	item := &requestItem{expiretime: time.Now(), callback: make(chan *resultItem)}
-	conn.rpcs.set(requestid, item)
+	item := &util.RequestItem{Expiretime: time.Now(), Result: make(chan *util.ResultItem)}
+	conn.rpcs.Set(requestid, item)
 	value, _ := jsonrpc.Request(requestid, method, args)
 	conn.queue <- value
 	timeout := time.NewTimer(conn.rpctimeout)
 	select {
-	case msg := <-item.callback:
-		result = msg.result
-		err = msg.err
+	case msg := <-item.Result:
+		result = msg.Result
+		err = msg.Err
 	case <-timeout.C:
 		err = errors.New("Send RPC time out," + requestid)
 	}
 	timeout.Stop()
-	conn.rpcs.delete(requestid)
-	close(item.callback)
+	conn.rpcs.Delete(requestid)
+	close(item.Result)
 	return
 }
 
@@ -147,6 +161,7 @@ func (conn *connector) notification(args []string) {
 func (conn *connector) close() {
 	close(conn.closed)
 	conn.socket.Close()
+	conn.p.sendEvent(&Event{EventType: CloseEvent, EventData: nil})
 }
 func (conn *connector) reconnect() {
 	conn.setConnected(false)
@@ -158,9 +173,7 @@ func (conn *connector) reconnect() {
 		default:
 			var err error
 			conn.socket, err = conn.createConn()
-			if conn.onReconnect != nil {
-				go conn.onReconnect(err)
-			}
+			conn.p.sendEvent(&Event{EventType: ReconnectEvent, EventData: err})
 			if err == nil {
 				go conn.read()
 				conn.setConnected(true)
@@ -169,7 +182,7 @@ func (conn *connector) reconnect() {
 		}
 	}
 }
-func (conn *connector) createConn() (*socket, error) {
+func (conn *connector) createConn() (socket *service.Socket, err error) {
 	tcpAddr, err := net.ResolveTCPAddr("tcp4", conn.addr)
 	if err != nil {
 		return nil, err
@@ -179,23 +192,23 @@ func (conn *connector) createConn() (*socket, error) {
 		return nil, err
 	}
 	tcp.SetKeepAlive(true)
-	socket := newSocket(tcp)
-	if conn.onSign != nil {
-		reply, autherr := conn.auth(socket, conn.onSign())
-		if autherr != nil {
-			socket.Close()
-			return nil, errors.New(reply)
-		}
-		if rpcerr := conn.validateAuth(reply); rpcerr != nil {
-			return nil, rpcerr
-		}
+	socket = service.NewSocket(tcp)
+	sign := conn.p.getSignature()
+	if sign == "" {
+		return socket, nil
 	}
-	return socket, nil
+	reply, err := conn.auth(socket, sign)
+	if err != nil {
+		socket.Close()
+		return nil, errors.New(reply)
+	}
+	err = conn.validateAuth(reply)
+	return
 }
 
 // Auth for get authorization from server with sign
-func (conn *connector) auth(socket *socket, sign string) (reply string, err error) {
-	_, err = socket.WriteBulkString(sign, time.Second*30)
+func (conn *connector) auth(socket *service.Socket, sign string) (reply string, err error) {
+	_, err = socket.WriteBulkString([]byte(sign), time.Second*30)
 	if err != nil {
 		return
 	}
@@ -203,7 +216,7 @@ func (conn *connector) auth(socket *socket, sign string) (reply string, err erro
 	return
 }
 func (conn *connector) validateAuth(reply string) error {
-	res, _ := jsonrpc.Parse(reply)
+	res, _ := jsonrpc.ParseString(reply)
 	if res.Error != nil {
 		return errors.New(res.Error.Message)
 	}
@@ -215,12 +228,6 @@ func (conn *connector) randID() string {
 	ISN := strconv.FormatInt(time.Now().UnixNano(), 36)
 	id := atomic.AddUint64(&conn.id, 1)
 	return ISN + ":" + strconv.FormatUint(id, 36)
-}
-
-func (conn *connector) sendError(err error) {
-	if conn.onError != nil {
-		go conn.onError(err)
-	}
 }
 
 func (conn *connector) setConnected(b bool) {

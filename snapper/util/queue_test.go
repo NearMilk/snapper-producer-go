@@ -1,4 +1,4 @@
-package snapper_test
+package util_test
 
 import (
 	"testing"
@@ -6,7 +6,7 @@ import (
 	"strconv"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/teambition/snapper-producer-go/snapper"
+	"github.com/teambition/snapper-producer-go/snapper/util"
 )
 
 func TestQueue(t *testing.T) {

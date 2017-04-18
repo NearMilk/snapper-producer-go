@@ -11,11 +11,10 @@ import (
 
 // Producer form send request and message to remote server
 type Producer struct {
-	queue       [][]string
-	conn        *connector
-	opts        *Options
-	OnReconnect reconnecting
-	OnError     erroring
+	queue [][]string
+	conn  *connector
+	opts  *Options
+	Event chan *Event
 }
 
 // Options for Producer
@@ -26,28 +25,21 @@ type Options struct {
 	Address          string   // defaut to "127.0.0.1:7720"
 	MessageWaitCount int      // default to 10000.
 	Rpctimeout       int      // default to 40 seconds
+
 }
 
 //New an Producer
-func New(opts *Options) (producer *Producer) {
+func New(opts *Options) (producer *Producer, err error) {
 	initOpts(opts)
 	// producer
 	producer = &Producer{queue: make([][]string, 1)}
 	producer.opts = opts
-
+	producer.Event = make(chan *Event, 100)
 	// connector
-	conn := newConnector(opts.Address, time.Duration(opts.Rpctimeout)*time.Second)
-	conn.onSign = producer.onSign
-
+	conn := newConnector(opts.Address, producer, time.Duration(opts.Rpctimeout)*time.Second)
 	producer.conn = conn
+	err = producer.conn.start()
 	return
-}
-
-// Connect ...
-func (p *Producer) Connect() (err error) {
-	p.conn.onReconnect = p.OnReconnect
-	p.conn.onError = p.OnError
-	return p.conn.start()
 }
 
 // SignAuth Generate a token string. payload should have userId property and type property
@@ -107,8 +99,11 @@ func initOpts(opts *Options) {
 		opts.Rpctimeout = 40
 	}
 }
-func (p *Producer) onSign() string {
+func (p *Producer) getSignature() string {
 	token, _ := p.SignAuth(map[string]interface{}{"id": p.opts.ProducerID})
 	buf, _ := jsonrpc.Request(p.conn.randID(), "auth", []string{token})
 	return string(buf)
+}
+func (p *Producer) sendEvent(event *Event) {
+	p.Event <- event
 }
